@@ -1,5 +1,5 @@
 ---
-title: "Preliminary on Credit card data"
+title: "Data Mining and Risk Analysis - Credit Score System"
 author: "Sunny Jing"
 date: "2/6/2017"
 output:
@@ -7,22 +7,54 @@ output:
   pdf_document: default
 ---
 
+## Problem Description 
+
+Through this project, we will build a credit score system based on data from previously available credit accounts, and determine a cut-off score at which the bank should offer credit to a given customer in different senarios. The focus of the project is not to build a good predictive model, but rather to show, as a bank or a credit agency, how to determine a cutoff score given a set of predictions or scores of the potential borrowers. 
+
+In determining a cut-off credit score, we consider the following two senarios:
+
+Scenario 1: Company targets the default rate for the newly approved cards to be 10% (risk driven)
+
+Scenario 2: Company is expecting 100,000 new applications and target the new approvals 50,000 (market share driven)
+
+
+## Data Cleaning and Preparation
 ```{r}
 datapath<-"/Users/dongpingjing/Dropbox/Data Mining/Project Folder/Revised Raw Data Set"
 original<-read.csv(file=paste(datapath,"LoanStats3b.csv",sep="/"))
 
-# Kepp only 36 month term data:
+# Overview of the data
+str(original)
+```
+
+
+__We are limiting the study to the accounts that were granted in 2014 for a period of 36 months, so we will remove all the 60 months accounts.__
+
+```{r}
+# Keep only 36 month term data:
 original<-original[original$term==" 36 months",]
 original$term<-NULL
 
 loan.data<-original
+colnames(loan.data)
+```
 
+
+This study is done at the end of 2016. Therefore, any account granted in 2013 with term period of 36 months should have been paid in full. In defining the response variable for the model study, we assgin all the accounts granted in 2013 that are not paid in full to be 1, as "defaulted", and those that are paid in full to be 0, as "not defaulted"
+
+
+```{r}
 # Response varible:
 loan.data$defaulted[loan.data$loan_status=="Fully Paid"]<-0
 loan.data$defaulted[is.na(loan.data$defaulted)]<-1
 loan.data$defaulted<-factor(loan.data$defaulted)
 loan.data$loan_status<-NULL
+table(loan.data$defaulted)
+```
 
+In data cleaning, we remove all the variables that don't carry any meaningful value, such as id, url... We also remove all the variables that are compeletly blank, or have unified value. Since the model will be used to predict credit score for any new customer, we will not have information such as loan amount, interest rate, etc., we will remove these variables that are associated with an existing account. 
+
+```{r}
 # Remove text value variables:
 loan.data$url<-NULL
 loan.data$emp_title<-NULL
@@ -44,23 +76,42 @@ loan.data$sub_grade<-NULL
 
 # variables to remove because of blank:
 blank<-apply(loan.data,2,function(x){sum(is.na(x))})
-loan.data[,blank==nrow(loan.data)]<-NULL
+(blank.col<-colnames(loan.data[,blank==nrow(loan.data)]))
+loan.data[,blank.col]<-NULL
 
-# Make sure class right:
-loan.data$policy_code<-factor(loan.data$policy_code)
+# Make sure class right (revol_util as a percentange value is recognized as a categorical value, so we need to transform it back to numeric):
 loan.data$revol_util<-as.numeric(levels(loan.data$revol_util)[loan.data$revol_util])
+head(loan.data$revol_util)
 
 # variables to remove because of unified value:
 one.value<-apply(loan.data,2,function(x){length(unique(x))})
-loan.data[,one.value==1]<-NULL
+(unified.col<-colnames(loan.data[,one.value==1]))
+loan.data[,unified.col]<-NULL
 
 # Remove variables regarding current credit card infomation: 
-# ("loan_amnt", "funded_amnt", funded_amnt_inv", "int_rate", "installment","out_prncp","out_prncp_inv","total_pymnt""total_pymnt_inv","total_rec_prncp","total_rec_int","total_rec_late_fee","recoveries","collection_recovery_fee""last_pymnt_amnt"")
-loan.data[,c(1:5,22:31)]<-NULL
+
+loan.data[,c("loan_amnt",
+             "funded_amnt",
+             "funded_amnt_inv",
+             "int_rate",
+             "installment",
+             "out_prncp",
+             "out_prncp_inv",
+             "total_pymnt",
+             "total_pymnt_inv",
+             "total_rec_prncp",
+             "total_rec_int",
+             "total_rec_late_fee",
+             "recoveries",
+             "collection_recovery_fee",
+             "last_pymnt_amnt")]<-NULL
 ```
 
 
 ## Finding and imputing for missing values:
+
+In inputing for missing values, we take two approaches, 99 quantile imputing and 0 imputing, depanding on the variable meanings. We impute 99 quantile for any variables that represent length of time. For example. variable "mths_since_last_delinq" means number of months since the borrower's last delinquent. When this variable is blank, it normally means that the borrower did not have a delinquent. Therefore, we need to impute a large enough value for its missing value to avoid distorting the meaning of the value. For variables that represent amount, we impute 0. 
+
 ```{r}
 missing<-apply(loan.data,2,function(x){sum(is.na(x))})
 colnames.missing<-colnames(loan.data[,missing!=0])
@@ -68,16 +119,19 @@ colnames.missing<-colnames.missing[order(colnames.missing)]
 colnames.missing
 
 # fill in variables that represent number of months with the 99 quantile of the data:
-colname<-colnames.missing[c(4:14,27)]
+(colname<-colnames.missing[c(4:14,27)])
 for (i in colname){         
   loan.data[ which(is.na(loan.data[,i])),i]<-quantile(loan.data[which(!is.na(loan.data[,i])),i], 0.99)
 }
 
 #fill in variables that represent amounts with 0:
-colname<-colnames.missing[c(1:3,14:26,28:34)]
+(colname<-colnames.missing[-c(4:14,27)])
 for (i in colname){
   loan.data[ which(is.na(loan.data[,i])),i] <-0
 }
+
+# Variables left:
+colnames(loan.data)
 ```
 
 
@@ -97,23 +151,20 @@ library("caret")
 library("rpart")
 tree<-rpart(defaulted~.,data=cat.var,control=rpart.control(minsplit=30L,cp=0,xval=10L,maxsurrogate = 0))
 tree$cptable
-rpart.plot(tree,extra=2)
 
 # Conduct step wise analysis:
 logistic.cat<-glm(defaulted~.,data=cat.var,family=binomial(link=logit))
 summary(logistic.cat)
-stepwise.cat<-step(logistic.cat,)
+stepwise.cat<-suppressWarnings(step(logistic.cat))
 summary(stepwise.cat)
 
-# Recategorize purpose:
-levels(loan.data$purpose)[c(1:8,12,13)]<-"consolidated"
-
-# Recategorize employment length:
-levels(loan.data$emp_length)[c(1:11)]<-"1 year +"
-
+# according to the stepwise model, we decide that the employment length does not matter as much as whether a borrower is employed. Therefore, we recategorize the emp_length variable to "Employed" and "n/a"
+levels(loan.data$emp_length)
+levels(loan.data$emp_length)[c(1:11)]<-"Employed"
+table(loan.data$emp_length)
 ```
 
-__numeric variables__
+__Numeric variables__
 ```{r}
 # Checking correlation between numeric variables:
 num.var<-loan.data[,cat!="factor"]
@@ -122,6 +173,7 @@ correlation<-round(cor(num.var),3)
 logistic.full<-glm(defaulted~.,data=loan.data,family=binomial(link=logit))
 summary(logistic.full)
 logistic.full$coefficients
+
 # Remove other insignificant variables
 to.remove<-names(summary(logistic.full)$coefficients[,1][round(summary(logistic.full)$coefficients,2)[,1]==0 & summary(logistic.full)$coefficients[,4]>=0.01])
 to.remove
@@ -130,7 +182,7 @@ colnames(model.data)
 ```
 
 
-Train and test:
+__Split data into train and test:__
 ```{r}
 # Take 63.2% for training and the rest for testing:
 n=nrow(model.data)
@@ -141,29 +193,15 @@ test<-model.data[-rownumbers,]
 ```
 
 
-Logistic Regression:
+__Logistic Regression:__
 ```{r}
 log.model.full<-glm(defaulted~.,data=train,family=binomial(link=logit))
 summary(log.model.full)
-stepwise<-step(log.model.full)
+stepwise<-suppressWarnings(step(log.model.full))
+stepwise$formula
 
-lda<-lda(formula,train)
-
-
-formula<-defaulted ~ emp_length + home_ownership + annual_inc + verification_status + purpose + dti + delinq_2yrs + inq_last_6mths +  open_acc + revol_util + total_acc + acc_open_past_24mths +  bc_open_to_buy + bc_util + mo_sin_old_rev_tl_op + mths_since_recent_bc +  mths_since_recent_inq + num_actv_bc_tl + num_bc_sats + num_il_tl +  num_rev_tl_bal_gt_0 + num_sats + num_tl_30dpd + num_tl_90g_dpd_24m +  num_tl_op_past_12m + percent_bc_gt_75 + pub_rec_bankruptcies
-
-log.model<-glm(formula,data=train,family=binomial(link=logit))
-summary(log.model)
-anova(log.model,log.model.full,test="Chisq")
-
-learn<-glm(defaulted~percent_bc_gt_75,train,family=binomial(link=logit))
-anova(log.model.full,learn,test="Chisq")
-
-# Try decision tree model:
-tree.model<-rpart(formula,data=train,control=rpart.control(minsplit=30L,cp=0,xval=10L,maxsurrogate = 0))
-tree.model1<-rpart(formula,data=train,control=rpart.control(minsplit=30L,cp=2.336995e-04,xval=10L,maxsurrogate = 0))
-tree.model1$cptable
-rpart.plot(tree.model1)
+anova(stepwise,log.model.full,test="Chisq")
+log.model<-stepwise
 ```
 
 ## VIF:
@@ -251,9 +289,6 @@ vif(log.model.vif)
 # Drop mths_since_recent_inq in Group 5:
 formula<-defaulted ~ emp_length + home_ownership + annual_inc + verification_status + purpose + dti + delinq_2yrs + inq_last_6mths  +  bc_open_to_buy + mo_sin_old_rev_tl_op + mths_since_recent_bc + num_il_tl +  num_rev_tl_bal_gt_0 + num_tl_30dpd + num_tl_90g_dpd_24m +  num_tl_op_past_12m + percent_bc_gt_75 + pub_rec_bankruptcies
 
-library("MASS")
-lda.model<-lda(formula,train)
-
 log.model.vif<-glm(formula,data=train,family=binomial(link=logit))
 vif(log.model.vif)
 
@@ -262,10 +297,12 @@ final.model<-log.model.vif
 
 ## Boostrapping:
 
+Using boostrapping for the coefficients. 
 ```{r}
-bootstrapping <-data.frame(matrix(rep(0,22000),nrow=1000,ncol=24))
+bootstrapping <-data.frame(matrix(rep(0,22000),nrow=1000,ncol=32))
 colnames(bootstrapping)<-rownames(summary(final.model)$coefficients)
 
+suppressWarnings(
 for (i in 1:1000){
   set.seed(12345*i)
   rnumber<-sample(seq_len(nrow(model.data)),size=n*0.632)
@@ -273,34 +310,24 @@ for (i in 1:1000){
   log.model<-glm(formula,data=boots.train,family=binomial(link=logit))
   bootstrapping [i,]<-summary(log.model)$coefficients[,1]
 }
+)
 
-boots.coeff<-apply(bootstrapping ,2,mean)
+boots.coeff<-apply(bootstrapping,2,mean)
 summary(final.model)
 final.model$coefficients <- boots.coeff
 ```
 
 ## Test
+
+Obviously, the model performs poorly. However, the objective of this project is not to build a predictive model to predict for default. Rather this work aims to show how to decide a cutoff point given a set of predictions of credit scores for borrowers. Based on the two senarios shown on the top, we will show two approaches in deciding this cutoff point. 
+
 ```{r}
 pred.test<-predict.glm(final.model,test,type="response")
 prediction.test<-ifelse(pred.test>0.5,1,0)
 
 confusionMatrix(prediction.test,test$defaulted)
-
-lift.chart<-as.data.frame(cbind(pred=pred.test[order(pred.test,decreasing=TRUE)],defaulted=test$defaulted[order(pred.test,decreasing=TRUE)]))
-lift.chart[,2]<-lift.chart[,2]-1
-head(lift.chart,10)
-
-n=round(nrow(lift.chart)/10)
-for (i in 1:10){
-  cumulative.lift.chart$cumul.lift[i]<-sum(lift.chart[(n*(i-1)+1):(n*i),2]/n)
-}
-overall<-sum(lift.chart[1:(n*10),2])/(n*10)
-
-# Lift Chart:
-library("ggplot2")
-barplot(cumulative.lift.chart[,2],ylim=c(0,0.5),)
-abline(h=overall,col="red")
 ```
+
 
 ## Assign scores:
 ```{r}
@@ -308,7 +335,9 @@ final.pred<-predict(final.model,model.data,type="response")
 scores<-round(850-(850-300)*final.pred)
 ```
 
+
 ## Decide a cutoff score based on percentage of number of people:
+
 ```{r}
 deciles<-quantile(scores, probs = seq(0,1, 0.10))
 deciles
@@ -326,10 +355,12 @@ for (i in 1:10){
 
 Decile.analysis$Percentage_Default<-round(Decile.analysis$`Cum_E(Num_Default)`/nrow(model.data),2)
 Decile.analysis
-
 ```
 
-## Decide a cutoff score based on a fixed money amount:
+According to this approach, we decide the cutoff credit score to be 755, and then we anticipate 8% of the borrowers will go to default. 
+
+
+## Decide a cutoff score based on a fixed amount of loss:
 
 ```{r}
 ordered.loan.amnt<-original$loan_amnt[order(final.pred,decreasing = TRUE)]
@@ -343,10 +374,9 @@ for (i in 1:10){
 
 Decile.analysis
 
-write.csv(Decile.analysis,"Decile.analysis.csv")
-
-plot(final.pred,scores)
 ```
+Here, if we anticipate that we will not get back 90 million, we will set the cut off score to be 766. 
+
 
 ## KS Stats:
 ```{r}
@@ -355,3 +385,6 @@ library("KScorrect")
 kstest<-ks.test(scores[scores<755],scores[scores>=755])
 kstest
 ```
+
+
+
